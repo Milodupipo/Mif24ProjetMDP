@@ -10,8 +10,11 @@ import environnement.Etat;
 import environnement.MDP;
 import environnement.gridworld.ActionGridworld;
 import java.util.HashMap;
+import java.util.Map.Entry;
+import java.util.Vector;
 import java.util.logging.Level;
 import java.util.logging.Logger;
+import java.util.concurrent.ThreadLocalRandom;
 
 /**
  * Cet agent met a jour sa fonction de valeur avec value iteration et choisit
@@ -27,6 +30,7 @@ public class ValueIterationAgent extends PlanningValueAgent {
      */
     protected double gamma;
     Map<Etat, Double> map = new HashMap<Etat, Double>();
+    private double valMax = 1;
 
     /**
      *
@@ -36,13 +40,16 @@ public class ValueIterationAgent extends PlanningValueAgent {
     public ValueIterationAgent(double gamma, MDP mdp) {
         super(mdp);
         this.gamma = gamma;
-		//*** VOTRE CODE
-
+        this.delta = 1;
+        //*** VOTRE CODE
+        List<Etat> le = this.mdp.getEtatsAccessibles();
+        for (Etat e : le) {
+            map.put(e, 0.0);
+        }
     }
 
     public ValueIterationAgent(MDP mdp) {
         this(0.9, mdp);
-
     }
 
     /**
@@ -51,15 +58,44 @@ public class ValueIterationAgent extends PlanningValueAgent {
      */
     @Override
     public void updateV() {
-		//delta est utilise pour detecter la convergence de l'algorithme
-        //lorsque l'on planifie jusqu'a convergence, on arrete les iterations lorsque
-        //delta < epsilon 
-        this.delta = 0.0;
-		//*** VOTRE CODE
-
-		// mise a jour vmax et vmin pour affichage du gradient de couleur:
-        //vmax est la valeur de max pour tout s de V
-        //vmin est la valeur de min pour tout s de V
+        Vector<Double> vDiff = new Vector<>();
+        //Calcul des valeurs pour chaque case et des différences (pour delta)
+        List<Etat> le = this.mdp.getEtatsAccessibles();
+        for (Etat e : le) {
+            Vector<Double> valeurs = calculerValeurs(e);
+            if (!valeurs.isEmpty()) {
+                double max = 0;
+                for (int i = 0; i < valeurs.size(); i++) {
+                    if (valeurs.get(i) > max) {
+                        max = valeurs.get(i);
+                    }
+                }
+                double ancienneVal = map.get(e);
+                map.replace(e, max);
+                vDiff.add(Math.abs(map.get(e) - ancienneVal));
+            }
+        }
+        //Recherche du maximum et minimum
+        double max = 0;
+        double min = map.get(le.get(0));
+        for (Entry e2 : map.entrySet()) {
+            if ((Double) e2.getValue() < min) {
+                min = (Double) e2.getValue();
+            } else if ((Double) e2.getValue() > max) {
+                max = (Double) e2.getValue();
+            }
+        }
+        //Récupération du maximum des différences entre l'ancien et le nouveau état
+        double maxDiff = 0;
+        for(Double d : vDiff){
+            if(d > maxDiff){
+                maxDiff = d;
+            }
+        }
+        valMax = vmax;
+        vmax = max;
+        vmin = min;
+        this.delta = maxDiff;
         // ...
         //******************* a laisser a la fin de la methode
         this.notifyObs();
@@ -71,16 +107,54 @@ public class ValueIterationAgent extends PlanningValueAgent {
      */
     @Override
     public Action getAction(Etat e) {
-		//*** VOTRE CODE
+        //*** VOTRE CODE
+        List<Action> la = getPolitique(e);
+        //Choix d'une action au hasard si il y a deux actions ou plus possible
+        //Sinon on retourne l'action
+        if (la.size() > 1) {
+            int num = ThreadLocalRandom.current().nextInt(0, la.size() + 1);
+            return la.get(num);
+        } else if (la.size() == 1) {
+            return la.get(0);
+        } else {
+            return null;
+        }
+    }
 
-        return null;
+    public Vector<Double> calculerValeurs(List<Action> la, Etat e) {
+        Map<Etat, Double> ma = new HashMap<Etat, Double>();
+        Vector<Double> resultats = new Vector<Double>();
+        try {
+            for (Action action : la) {
+                double res = 0;
+                //renvoie une map de de proba de transition, pas un float
+                ma = this.mdp.getEtatTransitionProba(e, action);
+                for (Entry e2 : ma.entrySet()) {
+                    double recompense = this.mdp.getRecompense(e, action, (Etat) e2.getKey());
+                    Etat etmp = (Etat) e2.getKey();
+                    //***************************************************************************************
+                    res += (double) e2.getValue() * (recompense + this.gamma * map.get(e2.getKey()));
+                }
+                resultats.add(res);
+            }
+        } catch (Exception ex) {
+            Logger.getLogger(ValueIterationAgent.class.getName()).log(Level.SEVERE, null, ex);
+        }
+        return resultats;
+    }
+
+    public Vector<Double> calculerValeurs(Etat e) {
+        List<Action> la = getPolitique(e);
+        return calculerValeurs(la, e);
     }
 
     @Override
     public double getValeur(Etat _e) {
-		//*** VOTRE CODE
-
-        return 0.0;
+        //*** VOTRE CODE
+        if (map.get(_e) == null) {
+            System.err.println(map.get(_e));
+        }
+        return map.get(_e);
     }
 
     /**
@@ -93,31 +167,48 @@ public class ValueIterationAgent extends PlanningValueAgent {
         List<Action> l = new ArrayList<Action>();
         //*** VOTRE CODE
         l = this.mdp.getActionsPossibles(_e);
-        for (Action a : l) {
-            try {
-                Map<Etat, Double> d = mdp.getEtatTransitionProba(_e, a);
-                System.out.println(d);
-            } catch (Exception ex) {
-                Logger.getLogger(ValueIterationAgent.class.getName()).log(Level.SEVERE, null, ex);
+
+        //Calcul des valeurs pour chaque case
+        Vector<Double> vd = calculerValeurs(l, _e);
+
+        int indiceMin = 0;
+
+        //Supprime de la liste d'actions les actions qui comportent les plus petites valeurs
+        //Garde les égalités si celles-ci correspondent à la plus grande valeur
+        if (!vd.isEmpty()) {
+            double min = vd.get(0);
+            for (int i = 1; i < vd.size(); i++) {
+                if (vd.get(i) > min) {
+                    l.remove(indiceMin);
+                    vd.remove(indiceMin);
+                    min = vd.get(0);
+                    indiceMin = 0;
+                    i = 0;
+                } else if (vd.get(i) < min) {
+                    min = vd.get(i);
+                    indiceMin = i;
+                    i = -1;
+                }
             }
         }
         return l;
-
     }
 
     @Override
     public void reset() {
         super.reset();
-		//*** VOTRE CODE
-
+        //*** VOTRE CODE
+        for (Entry e : map.entrySet()) {
+            map.put((Etat) e.getKey(), 0.0);
+        }
         /*-----------------*/
         this.notifyObs();
 
     }
 
     @Override
-    public void setGamma(double arg0) {
+    public void setGamma(double arg0
+    ) {
         this.gamma = arg0;
     }
-
 }
